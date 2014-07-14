@@ -12,6 +12,7 @@
 
 @interface ViewController ()
 @property BOOL dragable;
+@property (weak, nonatomic) IBOutlet UISlider *heightSlider;
 @property (nonatomic, strong) ZFModalTransitionAnimator *animator;
 @end
 
@@ -33,6 +34,11 @@
 {
     ModalViewController *modalVC = [self.storyboard instantiateViewControllerWithIdentifier:@"ModalViewController"];
     modalVC.modalPresentationStyle = UIModalPresentationCustom;
+    
+    CGRect newFrame = modalVC.view.frame;
+    newFrame.origin.y = modalVC.view.frame.size.height * (1.f - self.heightSlider.value);
+    newFrame.size.height *= self.heightSlider.value;
+    modalVC.view.frame = newFrame;
     
     self.animator = [[ZFModalTransitionAnimator alloc] initWithModalViewController:modalVC];
     self.animator.dragable = self.dragable;
