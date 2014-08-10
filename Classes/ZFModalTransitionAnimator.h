@@ -23,6 +23,7 @@ typedef NS_ENUM(NSUInteger, ZFModalTransitonDirection) {
 
 @property (nonatomic, assign, getter=isDragable) BOOL dragable;
 @property BOOL bounces;
+@property BOOL spring;
 @property ZFModalTransitonDirection direction;
 @property CGFloat behindViewScale;
 @property CGFloat behindViewAlpha;
