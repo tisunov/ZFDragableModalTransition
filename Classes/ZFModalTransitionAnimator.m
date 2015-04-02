@@ -6,148 +6,6 @@
 //
 
 #import "ZFModalTransitionAnimator.h"
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 70000
-@import Accelerate;
-#endif
-
-@interface UIImage (ImageBlur)
-- (UIImage *)applyBlurWithRadius:(CGFloat)blurRadius tintColor:(UIColor *)tintColor saturationDeltaFactor:(CGFloat)saturationDeltaFactor maskImage:(UIImage *)maskImage;
-@end
-
-#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 70000
-@implementation UIImage (ImageBlur)
-// This method is taken from Apple's UIImageEffects category provided in WWDC 2013 sample code
-- (UIImage *)applyBlurWithRadius:(CGFloat)blurRadius tintColor:(UIColor *)tintColor saturationDeltaFactor:(CGFloat)saturationDeltaFactor maskImage:(UIImage *)maskImage
-{
-    // Check pre-conditions.
-    if (self.size.width < 1 || self.size.height < 1) {
-        NSLog (@"*** error: invalid size: (%.2f x %.2f). Both dimensions must be >= 1: %@", self.size.width, self.size.height, self);
-        return nil;
-    }
-    if (!self.CGImage) {
-        NSLog (@"*** error: image must be backed by a CGImage: %@", self);
-        return nil;
-    }
-    if (maskImage && !maskImage.CGImage) {
-        NSLog (@"*** error: maskImage must be backed by a CGImage: %@", maskImage);
-        return nil;
-    }
-    
-    CGRect imageRect = { CGPointZero, self.size };
-    UIImage *effectImage = self;
-    
-    BOOL hasBlur = blurRadius > __FLT_EPSILON__;
-    BOOL hasSaturationChange = fabs(saturationDeltaFactor - 1.) > __FLT_EPSILON__;
-    if (hasBlur || hasSaturationChange) {
-        UIGraphicsBeginImageContextWithOptions(self.size, NO, [[UIScreen mainScreen] scale]);
-        CGContextRef effectInContext = UIGraphicsGetCurrentContext();
-        CGContextScaleCTM(effectInContext, 1.0, -1.0);
-        CGContextTranslateCTM(effectInContext, 0, -self.size.height);
-        CGContextDrawImage(effectInContext, imageRect, self.CGImage);
-        
-        vImage_Buffer effectInBuffer;
-        effectInBuffer.data     = CGBitmapContextGetData(effectInContext);
-        effectInBuffer.width    = CGBitmapContextGetWidth(effectInContext);
-        effectInBuffer.height   = CGBitmapContextGetHeight(effectInContext);
-        effectInBuffer.rowBytes = CGBitmapContextGetBytesPerRow(effectInContext);
-        
-        UIGraphicsBeginImageContextWithOptions(self.size, NO, [[UIScreen mainScreen] scale]);
-        CGContextRef effectOutContext = UIGraphicsGetCurrentContext();
-        vImage_Buffer effectOutBuffer;
-        effectOutBuffer.data     = CGBitmapContextGetData(effectOutContext);
-        effectOutBuffer.width    = CGBitmapContextGetWidth(effectOutContext);
-        effectOutBuffer.height   = CGBitmapContextGetHeight(effectOutContext);
-        effectOutBuffer.rowBytes = CGBitmapContextGetBytesPerRow(effectOutContext);
-        
-        if (hasBlur) {
-            // A description of how to compute the box kernel width from the Gaussian
-            // radius (aka standard deviation) appears in the SVG spec:
-            // http://www.w3.org/TR/SVG/filters.html#feGaussianBlurElement
-            //
-            // For larger values of 's' (s >= 2.0), an approximation can be used: Three
-            // successive box-blurs build a piece-wise quadratic convolution kernel, which
-            // approximates the Gaussian kernel to within roughly 3%.
-            //
-            // let d = floor(s * 3*sqrt(2*pi)/4 + 0.5)
-            //
-            // ... if d is odd, use three box-blurs of size 'd', centered on the output pixel.
-            //
-            CGFloat inputRadius = blurRadius * [[UIScreen mainScreen] scale];
-            NSUInteger radius = floor(inputRadius * 3. * sqrt(2 * M_PI) / 4 + 0.5);
-            if (radius % 2 != 1) {
-                radius += 1; // force radius to be odd so that the three box-blur methodology works.
-            }
-            vImageBoxConvolve_ARGB8888(&effectInBuffer, &effectOutBuffer, NULL, 0, 0, radius, radius, 0, kvImageEdgeExtend);
-            vImageBoxConvolve_ARGB8888(&effectOutBuffer, &effectInBuffer, NULL, 0, 0, radius, radius, 0, kvImageEdgeExtend);
-            vImageBoxConvolve_ARGB8888(&effectInBuffer, &effectOutBuffer, NULL, 0, 0, radius, radius, 0, kvImageEdgeExtend);
-        }
-        BOOL effectImageBuffersAreSwapped = NO;
-        if (hasSaturationChange) {
-            CGFloat s = saturationDeltaFactor;
-            CGFloat floatingPointSaturationMatrix[] = {
-                0.0722 + 0.9278 * s,  0.0722 - 0.0722 * s,  0.0722 - 0.0722 * s,  0,
-                0.7152 - 0.7152 * s,  0.7152 + 0.2848 * s,  0.7152 - 0.7152 * s,  0,
-                0.2126 - 0.2126 * s,  0.2126 - 0.2126 * s,  0.2126 + 0.7873 * s,  0,
-                0,                    0,                    0,  1,
-            };
-            const int32_t divisor = 256;
-            NSUInteger matrixSize = sizeof(floatingPointSaturationMatrix)/sizeof(floatingPointSaturationMatrix[0]);
-            int16_t saturationMatrix[matrixSize];
-            for (NSUInteger i = 0; i < matrixSize; ++i) {
-                saturationMatrix[i] = (int16_t)roundf(floatingPointSaturationMatrix[i] * divisor);
-            }
-            if (hasBlur) {
-                vImageMatrixMultiply_ARGB8888(&effectOutBuffer, &effectInBuffer, saturationMatrix, divisor, NULL, NULL, kvImageNoFlags);
-                effectImageBuffersAreSwapped = YES;
-            }
-            else {
-                vImageMatrixMultiply_ARGB8888(&effectInBuffer, &effectOutBuffer, saturationMatrix, divisor, NULL, NULL, kvImageNoFlags);
-            }
-        }
-        if (!effectImageBuffersAreSwapped)
-            effectImage = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-        
-        if (effectImageBuffersAreSwapped)
-            effectImage = UIGraphicsGetImageFromCurrentImageContext();
-        UIGraphicsEndImageContext();
-    }
-    
-    // Set up output context.
-    UIGraphicsBeginImageContextWithOptions(self.size, NO, [[UIScreen mainScreen] scale]);
-    CGContextRef outputContext = UIGraphicsGetCurrentContext();
-    CGContextScaleCTM(outputContext, 1.0, -1.0);
-    CGContextTranslateCTM(outputContext, 0, -self.size.height);
-    
-    // Draw base image.
-    CGContextDrawImage(outputContext, imageRect, self.CGImage);
-    
-    // Draw effect image.
-    if (hasBlur) {
-        CGContextSaveGState(outputContext);
-        if (maskImage) {
-            CGContextClipToMask(outputContext, imageRect, maskImage.CGImage);
-        }
-        CGContextDrawImage(outputContext, imageRect, effectImage.CGImage);
-        CGContextRestoreGState(outputContext);
-    }
-    
-    // Add in color tint.
-    if (tintColor) {
-        CGContextSaveGState(outputContext);
-        CGContextSetFillColorWithColor(outputContext, tintColor.CGColor);
-        CGContextFillRect(outputContext, imageRect);
-        CGContextRestoreGState(outputContext);
-    }
-    
-    // Output image is ready.
-    UIImage *outputImage = UIGraphicsGetImageFromCurrentImageContext();
-    UIGraphicsEndImageContext();
-    
-    return outputImage;
-}
-@end
-#endif
 
 @interface ZFModalTransitionAnimator ()
 @property (nonatomic, strong) UIViewController *modalController;
@@ -157,7 +15,7 @@
 @property BOOL isDismiss;
 @property BOOL isInteractive;
 @property CATransform3D tempTransform;
-@property (nonatomic, strong) UITapGestureRecognizer *backgroundTap;
+@property (nonatomic, strong) UIButton *dismissButton;
 @end
 
 @implementation ZFModalTransitionAnimator
@@ -174,13 +32,13 @@
         _behindViewScale = 0.9f;
         _behindViewAlpha = 1.0f;
         
-        if (![self isIOS8]) {
-            [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-            [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(orientationChanged:)
-                                                     name:UIDeviceOrientationDidChangeNotification
-                                                   object:nil];
-        }
+//        if (![self isIOS8]) {
+//            [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+//            [[NSNotificationCenter defaultCenter] addObserver:self
+//                                                 selector:@selector(orientationChanged:)
+//                                                     name:UIDeviceOrientationDidChangeNotification
+//                                                   object:nil];
+//        }
     }
     return self;
 }
@@ -215,52 +73,14 @@
 
 - (NSTimeInterval)transitionDuration:(id<UIViewControllerContextTransitioning>)transitionContext
 {
-    return 0.8;
+    return 0.6;
 }
 
-#pragma mark - blur view methods
-
-- (UIImage *)getScreenImage:(UIViewController *)viewController {
-    // frame without status bar
-    CGRect frame;
-    if (UIDeviceOrientationIsPortrait([UIApplication sharedApplication].statusBarOrientation)) {
-        frame = CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.width, [UIScreen mainScreen].bounds.size.height);
-    } else {
-        frame = CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.height, [UIScreen mainScreen].bounds.size.width);
+- (void)destroyDismissButton {
+    if (self.dismissButton) {
+        [self.dismissButton removeFromSuperview];
+        self.dismissButton = nil;
     }
-    // begin image context
-    UIGraphicsBeginImageContext(frame.size);
-    // get current context
-    CGContextRef currentContext = UIGraphicsGetCurrentContext();
-    
-    // draw current view
-    [viewController.view.layer renderInContext:UIGraphicsGetCurrentContext()];
-    // clip context to frame
-    CGContextClipToRect(currentContext, frame);
-    // get resulting cropped screenshot
-    UIImage *screenshot = UIGraphicsGetImageFromCurrentImageContext();
-    // end image context
-    UIGraphicsEndImageContext();
-    return screenshot;
-}
-
-- (UIImage *)getBlurredImage:(UIImage *)imageToBlur {
-    if ([[[UIDevice currentDevice] systemVersion] floatValue] >= 7.0) {
-        return [imageToBlur applyBlurWithRadius:0.5f tintColor:[UIColor clearColor] saturationDeltaFactor:1.0 maskImage:nil];
-    }
-    return imageToBlur;
-}
-
-- (UIImageView *)blurView:(UIViewController *)viewController {
-    UIImageView *blurView = [UIImageView new];
-    if (UIDeviceOrientationIsPortrait([UIApplication sharedApplication].statusBarOrientation)) {
-        blurView.frame = CGRectMake(0, 64, [UIScreen mainScreen].bounds.size.width, [UIScreen mainScreen].bounds.size.height);
-    } else {
-        blurView.frame = CGRectMake(0, 0, [UIScreen mainScreen].bounds.size.height, [UIScreen mainScreen].bounds.size.width);
-    }
-    blurView.alpha = 1.0f;
-    blurView.image = [self getBlurredImage:[self getScreenImage:viewController]];
-    return blurView;
 }
 
 - (void)animateTransition:(id<UIViewControllerContextTransitioning>)transitionContext
@@ -301,13 +121,25 @@
         CGPoint transformedPoint = CGPointApplyAffineTransform(startRect.origin, toViewController.view.transform);
         toViewController.view.frame = CGRectMake(transformedPoint.x, transformedPoint.y, startRect.size.width, startRect.size.height);
         
-        [self addTapToDismissGestureRecognizer:fromViewController.view];
-//        [fromViewController.view addSubview:[self blurView:fromViewController]];
+        [self addTopShadow:toViewController.view];
+        
+        CGRect overlayFrame = CGRectMake(0, 0, CGRectGetWidth(toViewController.view.frame), [self screenHeightForCurrentOrientation] - CGRectGetHeight(toViewController.view.frame));
+        
+        // If not transition to full screen view
+        if (CGRectGetHeight(toViewController.view.frame) != [self screenHeightForCurrentOrientation]) {
+            // Don't use UITapGestureRecognizer to avoid complex handling
+            self.dismissButton = [UIButton buttonWithType:UIButtonTypeCustom];
+            [self.dismissButton addTarget:self action:@selector(dismiss) forControlEvents:UIControlEventTouchUpInside];
+            self.dismissButton.backgroundColor = [UIColor clearColor];
+            self.dismissButton.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            self.dismissButton.frame = overlayFrame;
+            [fromViewController.view addSubview:self.dismissButton];
+        }
         
         [UIView animateWithDuration:[self transitionDuration:transitionContext]
                               delay:0
-             usingSpringWithDamping:self.spring ? 5 : 50
-              initialSpringVelocity:15
+             usingSpringWithDamping:self.spring ? 0.8 : 1
+              initialSpringVelocity:10
                             options:UIViewAnimationOptionCurveEaseOut
                          animations:^{
                              
@@ -325,6 +157,7 @@
                              
                          }];
     } else {
+        [self destroyDismissButton];
         
         [[transitionContext containerView] bringSubviewToFront:fromViewController.view];
         
@@ -333,7 +166,6 @@
         }
         
         toViewController.view.alpha = self.behindViewAlpha;
-        [toViewController.view removeGestureRecognizer:self.backgroundTap];
         
         CGRect endRect;
         
@@ -357,38 +189,48 @@
         CGPoint transformedPoint = CGPointApplyAffineTransform(endRect.origin, fromViewController.view.transform);
         endRect = CGRectMake(transformedPoint.x, transformedPoint.y, endRect.size.width, endRect.size.height);
         
-        [UIView animateWithDuration:[self transitionDuration:transitionContext]
+        if (self.behindViewScale < 1.0) {
+            [UIView animateWithDuration:[self transitionDuration:transitionContext]
+                                  delay:0
+                 usingSpringWithDamping:10
+                  initialSpringVelocity:10
+                                options:UIViewAnimationOptionCurveEaseOut
+                             animations:^{
+                                 CGFloat scaleBack = (1 / self.behindViewScale);
+                                 toViewController.view.layer.transform = CATransform3DScale(toViewController.view.layer.transform, scaleBack, scaleBack, 1);
+                             } completion:nil];
+        }
+        
+        [UIView animateWithDuration:[self transitionDuration:transitionContext] / 2
                               delay:0
-             usingSpringWithDamping:5
-              initialSpringVelocity:15
-                            options:UIViewAnimationOptionCurveEaseOut
+             usingSpringWithDamping:1
+              initialSpringVelocity:20
+                            options:UIViewAnimationOptionCurveEaseIn
                          animations:^{
-                             CGFloat scaleBack = (1 / self.behindViewScale);
-                             toViewController.view.layer.transform = CATransform3DScale(toViewController.view.layer.transform, scaleBack, scaleBack, 1);
-
-                             toViewController.view.alpha = 1.0f;
                              fromViewController.view.frame = endRect;
+                             toViewController.view.alpha = 1.0f;
                          } completion:^(BOOL finished) {
                              [transitionContext completeTransition:![transitionContext transitionWasCancelled]];
-                             
                          }];
     }
 }
 
-- (void)addTapToDismissGestureRecognizer:(UIView *)view {
-    // add gesture recognition for tapping on a UIlabel within the header (UICollectionView supplementary view)
-    self.backgroundTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDismissTap:)];
-    // make your gesture recognizer priority
-    self.backgroundTap.delaysTouchesBegan = YES;
-    self.backgroundTap.numberOfTapsRequired = 1;
+- (void)addTopShadow:(UIView *)view {
+    CALayer *borderLayer = [CALayer layer];
+    borderLayer.borderColor = [UIColor colorWithWhite:0.800 alpha:1.000].CGColor;
+    borderLayer.borderWidth = 0.5;
+    borderLayer.frame = CGRectMake(0, 0, view.frame.size.width, 1);
+    [view.layer addSublayer:borderLayer];
     
-    [view addGestureRecognizer:self.backgroundTap];
+//    view.layer.shadowColor = [[UIColor blackColor] CGColor];
+//    view.layer.shadowOffset = CGSizeMake(0, -1);
+//    view.layer.shadowRadius = 5.0;
+//    view.layer.shadowOpacity = 0.3;
+//    view.layer.shouldRasterize = YES;
+//    view.layer.rasterizationScale = [[UIScreen mainScreen] scale];
 }
 
-- (void)handleDismissTap:(UITapGestureRecognizer *)sender
-{
-    if (sender.state != UIGestureRecognizerStateEnded) return;
-    
+- (void)dismiss {
     [self.modalController dismissViewControllerAnimated:YES completion:nil];
 }
 
@@ -503,6 +345,14 @@
                                 CGRectGetHeight(fromViewController.view.frame));
     }
     
+    // reset to zero if x and y has unexpected value to prevent crash
+    if (isnan(updateRect.origin.x) || isinf(updateRect.origin.x)) {
+        updateRect.origin.x = 0;
+    }
+    if (isnan(updateRect.origin.y) || isinf(updateRect.origin.y)) {
+        updateRect.origin.y = 0;
+    }
+    
     CGPoint transformedPoint = CGPointApplyAffineTransform(updateRect.origin, fromViewController.view.transform);
     updateRect = CGRectMake(transformedPoint.x, transformedPoint.y, updateRect.size.width, updateRect.size.height);
     
@@ -511,6 +361,8 @@
 
 - (void)finishInteractiveTransition
 {
+    [self destroyDismissButton];
+    
     id<UIViewControllerContextTransitioning> transitionContext = self.transitionContext;
     
     UIViewController *fromViewController = [transitionContext viewControllerForKey:UITransitionContextFromViewControllerKey];
@@ -534,8 +386,7 @@
                              CGRectGetWidth(fromViewController.view.frame),
                              CGRectGetHeight(fromViewController.view.frame));
     }
-    
-    [toViewController.view removeGestureRecognizer:self.backgroundTap];
+
     
     CGPoint transformedPoint = CGPointApplyAffineTransform(endRect.origin, fromViewController.view.transform);
     endRect = CGRectMake(transformedPoint.x, transformedPoint.y, endRect.size.width, endRect.size.height);
@@ -619,18 +470,24 @@
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
 {
+    BOOL result = NO;
+    
     if (self.direction == ZFModalTransitonDirectionBottom) {
-        return YES;
+        result = YES;
     }
-    return NO;
+    
+    return result;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
 {
+    BOOL result = NO;
+    
     if (self.direction == ZFModalTransitonDirectionBottom) {
-        return YES;
+        result = YES;
     }
-    return NO;
+
+    return result;
 }
 
 #pragma mark - Utils
@@ -733,15 +590,14 @@
         return;
     }
     
-    if (nowPoint.y > prevPoint.y && self.scrollview.contentOffset.y <= 0) {
+    if (nowPoint.y > prevPoint.y && self.scrollview.contentOffset.y < 0) {
         self.isFail = @NO;
-    } else if (self.scrollview.contentOffset.y >= 0) {
+    } else if (self.scrollview.contentOffset.y >= -self.scrollview.contentInset.top) { // PAUL:
         self.state = UIGestureRecognizerStateFailed;
         self.isFail = @YES;
     } else {
         self.isFail = @NO;
     }
-    
 }
 
 @end
